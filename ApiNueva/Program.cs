@@ -1,5 +1,7 @@
+using Microsoft.AspNetCore.Http.Json;
 using Microsoft.OpenApi.Models;
 using UserManagementAPI.Models;
+using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -19,7 +21,6 @@ builder.Services.AddSwaggerGen(c =>
         }
     });
 
-    // Configuración para detectar endpoints en Minimal APIs
     c.TagActionsBy(api => new[] { api.RelativePath?.Split('/')[1] ?? "Default" });
     c.DocInclusionPredicate((name, api) => true);
 });
@@ -33,6 +34,60 @@ builder.Services.AddSingleton<List<User>>(new List<User>
 
 var app = builder.Build();
 
+// ===== Middleware personalizado =====
+
+// Error-handling middleware
+app.Use(async (context, next) =>
+{
+    try
+    {
+        await next.Invoke();
+    }
+    catch (Exception ex)
+    {
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        context.Response.ContentType = "application/json";
+        var errorResponse = JsonSerializer.Serialize(new { error = "Internal server error." });
+        await context.Response.WriteAsync(errorResponse);
+        // Optional: log the exception here if needed
+    }
+});
+
+// Authentication middleware
+app.Use(async (context, next) =>
+{
+    // Check for Authorization header
+    if (!context.Request.Headers.TryGetValue("Authorization", out var token) || string.IsNullOrEmpty(token))
+    {
+        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await context.Response.WriteAsync("Unauthorized: Missing or invalid token.");
+        return;
+    }
+
+    // For demo purposes, accept a simple static token (replace this with proper JWT or other validation)
+    const string validToken = "Bearer mysecrettoken";
+    if (!token.Equals(validToken, StringComparison.OrdinalIgnoreCase))
+    {
+        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await context.Response.WriteAsync("Unauthorized: Invalid token.");
+        return;
+    }
+
+    await next.Invoke();
+});
+
+// Logging middleware
+app.Use(async (context, next) =>
+{
+    var request = context.Request;
+    Console.WriteLine($"Incoming Request: {request.Method} {request.Path}");
+
+    await next.Invoke();
+
+    var response = context.Response;
+    Console.WriteLine($"Outgoing Response: {response.StatusCode}");
+});
+
 // ===== Configuración del pipeline =====
 if (app.Environment.IsDevelopment())
 {
@@ -40,7 +95,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI(c =>
     {
         c.SwaggerEndpoint("/swagger/v1/swagger.json", "UserManagementAPI v1");
-        c.RoutePrefix = "docs"; // Opcional: cambia la ruta de /swagger a /docs
+        c.RoutePrefix = "docs";
     });
 }
 
@@ -49,8 +104,7 @@ app.UseHttpsRedirection();
 // ===== Endpoints CRUD =====
 var usersGroup = app.MapGroup("/api/users").WithTags("Users");
 
-// GET /api/users - Obtener todos los usuarios
-usersGroup.MapGet("/", (List<User> users) => 
+usersGroup.MapGet("/", (List<User> users) =>
 {
     return Results.Ok(users);
 })
@@ -58,7 +112,6 @@ usersGroup.MapGet("/", (List<User> users) =>
 .Produces<List<User>>(StatusCodes.Status200OK)
 .WithOpenApi();
 
-// GET /api/users/{id} - Obtener usuario por ID
 usersGroup.MapGet("/{id}", (int id, List<User> users) =>
 {
     var user = users.FirstOrDefault(u => u.Id == id);
@@ -69,10 +122,8 @@ usersGroup.MapGet("/{id}", (int id, List<User> users) =>
 .Produces(StatusCodes.Status404NotFound)
 .WithOpenApi();
 
-// POST /api/users - Crear nuevo usuario
 usersGroup.MapPost("/", (User user, List<User> users) =>
 {
-    // Validación básica
     if (string.IsNullOrEmpty(user.Email))
     {
         return Results.BadRequest("El email es requerido");
@@ -93,7 +144,6 @@ usersGroup.MapPost("/", (User user, List<User> users) =>
 .Produces(StatusCodes.Status409Conflict)
 .WithOpenApi();
 
-// PUT /api/users/{id} - Actualizar usuario existente
 usersGroup.MapPut("/{id}", (int id, User updatedUser, List<User> users) =>
 {
     var user = users.FirstOrDefault(u => u.Id == id);
@@ -114,7 +164,6 @@ usersGroup.MapPut("/{id}", (int id, User updatedUser, List<User> users) =>
 .Produces(StatusCodes.Status404NotFound)
 .WithOpenApi();
 
-// DELETE /api/users/{id} - Eliminar usuario
 usersGroup.MapDelete("/{id}", (int id, List<User> users) =>
 {
     var user = users.FirstOrDefault(u => u.Id == id);
@@ -131,8 +180,7 @@ usersGroup.MapDelete("/{id}", (int id, List<User> users) =>
 .Produces(StatusCodes.Status404NotFound)
 .WithOpenApi();
 
-// Endpoint básico de prueba
 app.MapGet("/", () => "UserManagementAPI está funcionando correctamente!")
-    .ExcludeFromDescription(); // Oculta este endpoint en Swagger
+    .ExcludeFromDescription();
 
 app.Run();
